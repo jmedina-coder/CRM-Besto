@@ -528,7 +528,7 @@ export function LeadDrawer({
             </a>
           )}
           {lead.email && (
-            <a href={`mailto:${encodeURIComponent(lead.email)}`} title="Enviar correo">
+            <a href={`mailto:${encodeURIComponent(lead.email).replace("%40", "@")}`} title="Enviar correo">
               <Mail size={16} aria-hidden="true" /> <span>{lead.email}</span>
             </a>
           )}
