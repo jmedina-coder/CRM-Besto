@@ -1,0 +1,6 @@
+.git/
+.data/
+.env*
+!.env.example
+node_modules/
+.next/
