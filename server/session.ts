@@ -10,13 +10,18 @@ const cookieName = "besto_crm";
 const sessionLifetime = 60 * 60 * 24 * 7;
 const attemptWindow = 15 * 60_000;
 const attemptLimit = 8;
+const passwordVariables: Record<SalesUserId, string> = {
+  jhon: "CRM_JHON_PASSWORD_HASH",
+  pelos: "CRM_PELOS_PASSWORD_HASH",
+  alejandra: "CRM_ALEJANDRA_PASSWORD_HASH",
+};
 
 function getUser(username: string | undefined) {
   return SALES_USERS.find((user) => user.id === username);
 }
 
 function passwordHash(userId: SalesUserId) {
-  const encoded = userId === "jhon" ? process.env.CRM_JHON_PASSWORD_HASH : process.env.CRM_PELOS_PASSWORD_HASH;
+  const encoded = process.env[passwordVariables[userId]];
   const match = /^scrypt:([a-f0-9]{32}):([a-f0-9]{64})$/i.exec(encoded ?? "");
   if (!match) throw new RequestError(503, "El acceso al CRM aún no está configurado.");
   return { salt: Buffer.from(match[1], "hex"), key: Buffer.from(match[2], "hex") };

@@ -6,6 +6,7 @@ CRM en español para registrar prospectos, seguir visitas y demos, y convertir v
 | --- | --- | --- |
 | `jhon` | Encargado de ventas | Consulta todo el equipo y asigna o reasigna leads. Puede filtrar por encargado. |
 | `pelos` | Ventas | Crea, consulta y actualiza las fichas asignadas a su cuenta. |
+| `alejandra` | Ventas | Crea, consulta y actualiza las fichas asignadas a su cuenta. |
 
 El servidor aplica los permisos en cada operación. Las contraseñas se configuran fuera del repositorio.
 
@@ -14,7 +15,7 @@ El servidor aplica los permisos en cada operación. Las contraseñas se configur
 1. Instala Node.js 24 y ejecuta `npm ci`.
 2. Copia `.env.example` a `.env.development.local`. Usa `chmod 600 .env.development.local` para restringir el acceso local.
 3. Genera `CRM_SESSION_SECRET` con `openssl rand -hex 32`.
-4. Para cada usuario, genera el hash con el siguiente comando en Bash. Guarda el resultado en la variable `CRM_JHON_PASSWORD_HASH` o `CRM_PELOS_PASSWORD_HASH` correspondiente.
+4. Para cada usuario, genera el hash con el siguiente comando en Bash. Guarda el resultado en `CRM_JHON_PASSWORD_HASH`, `CRM_PELOS_PASSWORD_HASH` o `CRM_ALEJANDRA_PASSWORD_HASH`, según corresponda.
 
    ```bash
    read -rs -p 'Contraseña: ' besto_password
@@ -29,11 +30,17 @@ El servidor aplica los permisos en cada operación. Las contraseñas se configur
    unset besto_password
    ```
 
-5. Ejecuta `npm run dev` y abre `http://localhost:3000`. SQLite crea el archivo de datos local al primer acceso. Para usar un Postgres externo, configura `DATABASE_URL`.
+5. Ejecuta `npm run dev` y abre `http://localhost:3000`. SQLite crea el archivo de datos local al primer acceso. Para usar Supabase, configura `DATABASE_URL` (ver Despliegue).
 
-## Despliegue provisional
+## Importar contactos
 
-Configura las tres variables de autenticación como secretos de Preview y conecta una base de datos Neon Postgres dedicada para `DATABASE_URL`. El CRM crea sus tablas automáticamente. El código y las variables se administran por separado. La protección de despliegues de Vercel y las cuentas del CRM controlan accesos distintos.
+El encargado de ventas puede abrir **Importar contactos** desde el Embudo o Contactos. Selecciona un Excel `.xlsx` o CSV UTF-8 de hasta 4 MB, elige el responsable predeterminado y revisa el resumen antes de confirmar.
+
+El formato BESTO usa los encabezados **Código**, **Nombre de la persona**, **Teléfono**, **Correo**, **Nombre del establecimiento** y **Actividad**. El importador reconoce variantes como **Nombre**, **Celular**, **Email** y **Empresa**. El nombre de cada hoja Excel se agrega como etiqueta. Una columna opcional **Responsable** puede indicar `jhon`, `pelos` o `alejandra` por fila. Las filas repetidas se omiten al volver a cargar el mismo archivo.
+
+## Despliegue
+
+Configura `CRM_SESSION_SECRET` y los hashes de contraseña como secretos de Vercel en Production y Preview. Configura `DATABASE_URL` con la cadena de conexión de Supabase de cada entorno: en el panel de Supabase, **Connect → Connection string → Transaction pooler** (puerto `6543`). El servidor se conecta directo a Postgres; no usa la clave publicable ni la API de datos de Supabase. El CRM crea sus tablas automáticamente y activa RLS sin políticas, así que la API pública no puede leerlas. El esquema también está en `supabase/migrations/` para aplicarlo desde el editor SQL o con `supabase db push`. Vuelve a desplegar después de cambiar un secreto. La protección de despliegues de Vercel y las cuentas del CRM controlan accesos distintos.
 
 ## Verificación
 

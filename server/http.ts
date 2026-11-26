@@ -24,7 +24,9 @@ export async function handle(action: () => Promise<NextResponse> | NextResponse)
       return reply({ error: error.message }, error.status);
     }
 
-    console.error("Error interno del CRM", error instanceof Error ? error.name : "Error");
+    // Log the name and code only; messages can carry hostnames or query data.
+    const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
+    console.error("Error interno del CRM", error instanceof Error ? error.name : "Error", code ?? "");
     return reply({ error: "No se pudo completar la operación. Intenta de nuevo." }, 503);
   }
 }
@@ -47,14 +49,29 @@ export async function readBody(request: NextRequest): Promise<Record<string, unk
     throw new RequestError(415, "Envía la solicitud en JSON.");
   }
 
-  if (Number(request.headers.get("content-length")) > maxPayloadBytes) {
+  const bytes = await readBytes(request, maxPayloadBytes);
+  try {
+    const json = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const parsed: unknown = JSON.parse(json);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new RequestError(400, "La solicitud debe contener un objeto JSON.");
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof RequestError) throw error;
+    throw new RequestError(400, "La solicitud contiene JSON inválido.");
+  }
+}
+
+export async function readBytes(request: NextRequest, limit: number): Promise<Buffer> {
+  if (!request.body) throw new RequestError(400, "La solicitud está vacía.");
+  if (Number(request.headers.get("content-length")) > limit) {
     throw new RequestError(413, "La solicitud es demasiado grande.");
   }
 
   const reader = request.body.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const chunks: Uint8Array[] = [];
   let length = 0;
-  let json = "";
 
   try {
     while (true) {
@@ -62,25 +79,25 @@ export async function readBody(request: NextRequest): Promise<Record<string, unk
       if (done) break;
 
       length += value.byteLength;
-      if (length > maxPayloadBytes) {
-        await reader.cancel();
+      if (length > limit) {
+        await reader.cancel().catch(() => {});
         throw new RequestError(413, "La solicitud es demasiado grande.");
       }
-      json += decoder.decode(value, { stream: true });
+      chunks.push(value);
     }
 
-    const parsed: unknown = JSON.parse(json + decoder.decode());
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new RequestError(400, "La solicitud debe contener un objeto JSON.");
-    }
-
-    return parsed as Record<string, unknown>;
+    return Buffer.concat(chunks, length);
   } catch (error) {
     if (error instanceof RequestError) throw error;
-    throw new RequestError(400, "La solicitud contiene JSON inválido.");
+    throw new RequestError(400, "No se pudo leer la solicitud completa.");
   } finally {
     reader.releaseLock();
   }
+}
+
+export function leadCursor(value: string) {
+  if (value && !uuid.test(value)) throw new RequestError(400, "La página de contactos no es válida.");
+  return value.toLowerCase();
 }
 
 export function idempotencyKey(request: NextRequest) {

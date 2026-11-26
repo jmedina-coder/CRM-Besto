@@ -82,6 +82,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sidebar-footer .icon-button:hover { color: #fff; background: #39433b; }
 .avatar { display: inline-grid; place-items: center; width: 1.48rem; height: 1.48rem; background: #f6e3d8; color: #8e411e; border-radius: 50%; font-weight: 720; flex: 0 0 auto; font-size: .65rem; }
 .avatar.pelos { color: #4e3b87; background: #ebe5f9; }
+.avatar.alejandra { color: #19624e; background: #dcf0e8; }
 .profile-avatar { width: 2.25rem; height: 2.25rem; font-size: .82rem; }
 .app-main { margin-left: var(--sidebar-width); min-width: 0; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: 0 clamp(1.5rem, 3vw, 3rem); min-height: 4.15rem; border-bottom: 1px solid var(--line); background: #fff; }
@@ -95,6 +96,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .page-heading h1 { margin: 0; font-size: clamp(1.8rem, 3vw, 2.45rem); letter-spacing: -.064em; line-height: 1.12; font-weight: 760; }
 .page-heading p { margin: .48rem 0 0; color: var(--muted); font-size: .97rem; line-height: 1.45; }
 .page-heading .primary { margin-bottom: .08rem; }
+.workspace-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.lead-pagination { display: flex; justify-content: flex-end; align-items: center; gap: .3rem; margin-top: .6rem; color: var(--muted); font-size: .78rem; }
+.lead-pagination .icon-button { width: 1.8rem; height: 1.8rem; }
 
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .85rem; margin-bottom: 1.6rem; }
 .metric { min-width: 0; padding: .95rem 1rem 1rem; border: 1px solid var(--line); background: #fff; border-radius: .78rem; box-shadow: 0 1px 2px #161b1707; }
@@ -221,7 +225,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .topbar-context { font-size: .72rem; }
   .page-heading { align-items: flex-start; gap: .4rem; flex-direction: column; margin-bottom: .95rem; }
   .page-heading p { font-size: .88rem; }
-  .page-heading .primary { margin-top: .38rem; }
+  .workspace-actions { margin-top: .38rem; }
   .metrics { gap: .45rem; margin-bottom: .95rem; }
   .metric { padding: .65rem .55rem; }
   .metric-title { gap: .31rem; }

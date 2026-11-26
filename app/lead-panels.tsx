@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowUpRight,
   CalendarDays,
   Check,
   ChevronDown,
@@ -15,6 +16,7 @@ import {
   Plus,
   Send,
   Tags,
+  Upload,
   UserRoundPlus,
   X,
 } from "lucide-react";
@@ -24,6 +26,7 @@ import {
   type ActivityInput,
   type CrmUser,
   type Lead,
+  type LeadImportReport,
   type LeadInput,
   type SalesUserId,
   type Stage,
@@ -45,9 +48,11 @@ const activityOptions = {
   email: { label: "Correo", icon: Mail, placeholder: "Escribe o pega el correo." },
 } satisfies Record<ActivityInput["kind"], { label: string; icon: typeof Phone; placeholder: string }>;
 
-const stageIcons = {
+const timelineOptions = {
+  ...activityOptions,
   created: { label: "Contacto creado", icon: UserRoundPlus },
   stage: { label: "Cambio de etapa", icon: ClipboardList },
+  updated: { label: "Datos actualizados", icon: Pencil },
 };
 
 const activityKinds = Object.keys(activityOptions) as ActivityInput["kind"][];
@@ -87,6 +92,7 @@ function Panel({
   title,
   subtitle,
   onClose,
+  onCancel = onClose,
   busy,
   children,
   className = "",
@@ -94,6 +100,7 @@ function Panel({
   title: string;
   subtitle?: string;
   onClose: () => void;
+  onCancel?: () => void;
   busy: boolean;
   children: ReactNode;
   className?: string;
@@ -119,7 +126,7 @@ function Panel({
       aria-describedby={subtitle ? subtitleId : undefined}
       onCancel={(event) => {
         event.preventDefault();
-        if (!busy) onClose();
+        if (!busy) onCancel();
       }}
       onClick={(event) => {
         if (event.target === event.currentTarget && !busy) {
@@ -147,6 +154,127 @@ function Panel({
   );
 }
 
+const importCount = new Intl.NumberFormat("es-CO");
+
+export function LeadImportPanel({
+  currentUser,
+  onClose,
+  onUpload,
+}: {
+  currentUser: CrmUser;
+  onClose: () => void;
+  onUpload: (file: File, assignee: SalesUserId, confirm: boolean) => Promise<LeadImportReport>;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [assignee, setAssignee] = useState(currentUser.id);
+  const [report, setReport] = useState<LeadImportReport | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const completed = report?.created !== undefined;
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!file || busy || completed) return;
+    setBusy(true);
+    setError("");
+    try {
+      setReport(await onUpload(file, assignee, !!report));
+    } catch (cause) {
+      setError(errorMessage(cause, "No se pudo importar el archivo."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel title="Importar contactos" onClose={onClose} busy={busy} className="lead-panel-editor">
+      <form className="lead-panel-form" onSubmit={submit} aria-busy={busy || undefined}>
+        <div className="lead-panel-scroll lead-panel-import">
+          <fieldset className="lead-panel-fields" disabled={busy || completed}>
+            <legend>Archivo y asignación</legend>
+            <div className="lead-panel-grid">
+              <label className="lead-panel-full">
+                <span>Archivo de contactos</span>
+                <input type="file" accept=".xlsx,.csv" required data-panel-initial-focus onChange={(event) => {
+                  setFile(event.target.files?.[0] ?? null);
+                  setReport(null);
+                  setError("");
+                }} />
+                <small>Excel .xlsx o CSV UTF-8, hasta 4 MB.</small>
+              </label>
+              <label className="lead-panel-full">
+                <span>Responsable predeterminado</span>
+                <SelectField value={assignee} onChange={(event) => {
+                  setAssignee(event.target.value as SalesUserId);
+                  setReport(null);
+                  setError("");
+                }}>
+                  {SALES_USERS.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                </SelectField>
+                <small>La columna Responsable tiene prioridad cuando indica un usuario del CRM.</small>
+              </label>
+            </div>
+          </fieldset>
+          {report && <section className="lead-panel-import-report" aria-label="Resultado de la importación" aria-live="polite">
+            <h3>{completed ? `${importCount.format(report.created!)} contactos importados` : `${importCount.format(report.rows)} contactos listos para importar`}</h3>
+            <ul>{report.sheets.map((sheet) => <li key={sheet.name}><span>{sheet.name}</span><strong>{importCount.format(sheet.rows)}</strong></li>)}</ul>
+            {completed
+              ? <p>{importCount.format(report.skipped ?? 0)} registros ya existían o estaban repetidos en el archivo.</p>
+              : <p>{SALES_USERS.filter(({ id }) => report.assigned[id]).map(({ id, name }) => `${name} · ${importCount.format(report.assigned[id])}`).join(" · ")}</p>}
+            {report.namesCompleted > 0 && <p>{importCount.format(report.namesCompleted)} registros sin nombre usan el establecimiento o un identificador como nombre de ficha.</p>}
+            {report.unverifiedEmails > 0 && <p>{importCount.format(report.unverifiedEmails)} correos con formato inválido se conservan en los datos de importación.</p>}
+            {report.ignoredSheets.length > 0 && <p>Hojas sin columnas de contactos fuera de la importación. {report.ignoredSheets.join(", ")}.</p>}
+          </section>}
+          {error && <p className="lead-panel-alert" role="alert">{error}</p>}
+        </div>
+        <footer className="lead-panel-footer">
+          <button type="button" className="lead-panel-button lead-panel-secondary" onClick={onClose} disabled={busy}>{completed ? "Cerrar" : "Cancelar"}</button>
+          {!completed && <button type="submit" className="lead-panel-button lead-panel-primary" disabled={!file || busy}>
+            <Upload size={16} aria-hidden="true" />{busy ? (report ? "Importando…" : "Leyendo archivo…") : report ? "Confirmar importación" : "Revisar archivo"}
+          </button>}
+        </footer>
+      </form>
+    </Panel>
+  );
+}
+
+function SaleConfirmation({
+  description = "El contacto pasará a Clientes y conservará su historial.",
+  busy,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  description?: string;
+  busy: boolean;
+  error: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const titleId = useId();
+  const title = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    title.current?.focus();
+  }, []);
+
+  return (
+    <section className="lead-panel-confirm" aria-labelledby={titleId}>
+      <div>
+        <h3 id={titleId} ref={title} tabIndex={-1}>Confirmar venta</h3>
+        <p className="lead-panel-confirm-description">{description}</p>
+      </div>
+      {error && <p className="lead-panel-alert" role="alert">{error}</p>}
+      <div className="lead-panel-confirm-actions">
+        <button type="button" className="lead-panel-button lead-panel-secondary" onClick={onCancel} disabled={busy}>Cancelar</button>
+        <button type="button" className="lead-panel-button lead-panel-primary" onClick={onConfirm} disabled={busy}>
+          {busy ? "Confirmando…" : "Confirmar venta"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function LeadEditor({
   lead,
   initialStage = "new",
@@ -166,11 +294,21 @@ export function LeadEditor({
   const [tagInput, setTagInput] = useState("");
   const [tagError, setTagError] = useState("");
   const [error, setError] = useState("");
+  const [pendingSale, setPendingSale] = useState<LeadInput | null>(null);
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
+  const saveButton = useRef<HTMLButtonElement>(null);
+  const restoreSaveFocus = useRef(false);
   const tagErrorId = useId();
   const tagInputId = useId();
   const tagRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!pendingSale && restoreSaveFocus.current) {
+      saveButton.current?.focus();
+      restoreSaveFocus.current = false;
+    }
+  }, [pendingSale]);
 
   function mergeTags() {
     const pendingTags = tagInput.split(",").map((tag) => tag.trim()).filter(Boolean);
@@ -194,9 +332,31 @@ export function LeadEditor({
     return added;
   }
 
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function cancelSale() {
+    restoreSaveFocus.current = true;
+    setPendingSale(null);
+    setError("");
+  }
+
+  async function persist(input: LeadInput) {
     if (saving.current) return;
+    saving.current = true;
+    setBusy(true);
+    setError("");
+
+    try {
+      await onSave(input);
+    } catch (cause) {
+      setError(errorMessage(cause, "No se pudo guardar el contacto. Vuelve a intentarlo."));
+    } finally {
+      saving.current = false;
+      setBusy(false);
+    }
+  }
+
+  function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving.current || pendingSale) return;
     const currentTags = mergeTags();
     if (!currentTags) return;
     const values = new FormData(event.currentTarget);
@@ -210,36 +370,38 @@ export function LeadEditor({
       return;
     }
 
-    saving.current = true;
-    setBusy(true);
-    setError("");
-
-    try {
-      let nextFollowUp = lead?.nextFollowUp ?? null;
-      if (date !== inputDate(nextFollowUp)) {
-        nextFollowUp = date ? new Date(`${date}:00-05:00`).toISOString() : null;
+    let nextFollowUp = lead?.nextFollowUp ?? null;
+    if (date !== inputDate(nextFollowUp)) {
+      const dateValue = date ? new Date(`${date}:00-05:00`) : null;
+      if (dateValue && !Number.isFinite(dateValue.getTime())) {
+        setError("Elige una fecha y hora de seguimiento válidas.");
+        return;
       }
-
-      await onSave({
-        name: field("name"),
-        company: field("company"),
-        role: field("role"),
-        phone: field("phone"),
-        email: field("email"),
-        source: field("source"),
-        tags: currentTags,
-        amount: amount ? Number(amount) : null,
-        stage: field("stage") as Stage,
-        assignee: currentUser.role === "manager" ? field("assignee") as SalesUserId : currentUser.id,
-        nextFollowUp,
-        nextAction: field("nextAction"),
-      });
-    } catch (cause) {
-      setError(errorMessage(cause, "No se pudo guardar el contacto. Vuelve a intentarlo."));
-    } finally {
-      saving.current = false;
-      setBusy(false);
+      nextFollowUp = dateValue?.toISOString() ?? null;
     }
+
+    const input: LeadInput = {
+      name: field("name"),
+      company: field("company"),
+      role: field("role"),
+      phone: field("phone"),
+      email: field("email"),
+      source: field("source"),
+      tags: currentTags,
+      amount: amount ? Number(amount) : null,
+      stage: field("stage") as Stage,
+      assignee: currentUser.role === "manager" ? field("assignee") as SalesUserId : currentUser.id,
+      nextFollowUp,
+      nextAction: field("nextAction"),
+    };
+
+    if (input.stage === "won" && lead?.stage !== "won") {
+      setError("");
+      setPendingSale(input);
+      return;
+    }
+
+    void persist(input);
   }
 
   return (
@@ -247,21 +409,22 @@ export function LeadEditor({
       title={lead ? "Editar contacto" : "Nuevo lead"}
       subtitle={lead ? lead.name : "Agrega los datos para iniciar el seguimiento comercial."}
       onClose={onClose}
+      onCancel={pendingSale ? cancelSale : onClose}
       busy={busy}
       className="lead-panel-editor"
     >
       <form className="lead-panel-form" onSubmit={save} aria-busy={busy || undefined}>
         <div className="lead-panel-scroll">
-          <fieldset className="lead-panel-fields" disabled={busy}>
+          <fieldset className="lead-panel-fields" disabled={busy || !!pendingSale}>
             <legend>Datos del contacto</legend>
             <div className="lead-panel-grid">
               <label>
                 <span>Nombre completo <span className="lead-panel-required">*</span></span>
-                <input name="name" required maxLength={120} defaultValue={lead?.name} data-panel-initial-focus={focus !== "followup" ? true : undefined} placeholder="Nombre y apellido" autoComplete="off" />
+                <input name="name" required maxLength={254} defaultValue={lead?.name} data-panel-initial-focus={focus !== "followup" ? true : undefined} placeholder="Nombre y apellido" autoComplete="off" />
               </label>
               <label>
                 <span>Empresa o negocio</span>
-                <input name="company" maxLength={120} defaultValue={lead?.company} placeholder="Nombre del negocio" autoComplete="off" />
+                <input name="company" maxLength={254} defaultValue={lead?.company} placeholder="Nombre del negocio" autoComplete="off" />
               </label>
               <label>
                 <span>Teléfono o WhatsApp</span>
@@ -286,7 +449,7 @@ export function LeadEditor({
             </div>
           </fieldset>
 
-          <fieldset className="lead-panel-fields" disabled={busy}>
+          <fieldset className="lead-panel-fields" disabled={busy || !!pendingSale}>
             <legend>Seguimiento comercial</legend>
             <div className="lead-panel-grid">
               <label>
@@ -366,14 +529,26 @@ export function LeadEditor({
               </div>
             </div>
           </fieldset>
-          {error && <p className="lead-panel-alert" role="alert">{error}</p>}
+          {error && !pendingSale && <p className="lead-panel-alert" role="alert">{error}</p>}
         </div>
         <footer className="lead-panel-footer">
-          <button type="button" className="lead-panel-button lead-panel-secondary" onClick={onClose} disabled={busy}>Cancelar</button>
-          <button type="submit" className="lead-panel-button lead-panel-primary" disabled={busy}>
-            {lead ? <Check size={17} aria-hidden="true" /> : <Plus size={17} aria-hidden="true" />}
-            {busy ? "Guardando…" : lead ? "Guardar cambios" : "Crear lead"}
-          </button>
+          {pendingSale ? (
+            <SaleConfirmation
+              description={lead ? undefined : "El contacto se creará directamente en Clientes."}
+              busy={busy}
+              error={error}
+              onCancel={cancelSale}
+              onConfirm={() => void persist(pendingSale)}
+            />
+          ) : (
+            <>
+              <button type="button" className="lead-panel-button lead-panel-secondary" onClick={onClose} disabled={busy}>Cancelar</button>
+              <button type="submit" ref={saveButton} className="lead-panel-button lead-panel-primary" disabled={busy}>
+                {lead ? <Check size={17} aria-hidden="true" /> : <Plus size={17} aria-hidden="true" />}
+                {busy ? "Guardando…" : lead ? "Guardar cambios" : "Crear lead"}
+              </button>
+            </>
+          )}
         </footer>
       </form>
     </Panel>
@@ -381,9 +556,7 @@ export function LeadEditor({
 }
 
 function ActivityEntry({ activity }: { activity: Activity }) {
-  const definition = activity.kind === "stage" || activity.kind === "created"
-    ? stageIcons[activity.kind]
-    : activityOptions[activity.kind];
+  const definition = timelineOptions[activity.kind];
   const Icon = definition.icon;
   const author = SALES_USERS.find(({ id }) => id === activity.author)?.name;
 
@@ -408,17 +581,21 @@ function ActivityEntry({ activity }: { activity: Activity }) {
 export function LeadDrawer({
   lead,
   currentUser,
+  statusMessage,
   onClose,
   onEdit,
   onStage,
   onActivity,
+  onViewClients,
 }: {
   lead: Lead;
   currentUser: CrmUser;
+  statusMessage?: string;
   onClose: () => void;
   onEdit: (focus?: "followup") => void;
   onStage: (stage: Stage) => Promise<void>;
   onActivity: (input: ActivityInput) => Promise<void>;
+  onViewClients: () => void;
 }) {
   const [kind, setKind] = useState<ActivityInput["kind"]>("note");
   const [direction, setDirection] = useState<"sent" | "received">("sent");
@@ -428,36 +605,40 @@ export function LeadDrawer({
   const [stageError, setStageError] = useState("");
   const [activityError, setActivityError] = useState("");
   const inFlight = useRef(false);
-  const confirmTitle = useRef<HTMLHeadingElement>(null);
   const confirmTrigger = useRef<HTMLElement | null>(null);
   const stageControl = useRef<HTMLSelectElement>(null);
   const saleControl = useRef<HTMLButtonElement>(null);
+  const clientsControl = useRef<HTMLButtonElement>(null);
   const stageId = useId();
   const kindId = useId();
   const directionId = useId();
   const bodyId = useId();
-  const confirmTitleId = useId();
   const stage = STAGES.find(({ id }) => id === lead.stage);
   const assignee = lead.assignee === currentUser.id
     ? currentUser.name
     : SALES_USERS.find(({ id }) => id === lead.assignee)?.name;
+  const identity = [lead.company !== lead.name ? lead.company : "", lead.role].filter(Boolean).join(" · ");
   const phone = whatsappNumber(lead.phone);
   const messages = kind === "whatsapp" || kind === "email";
+  const showingConfirmation = confirming && lead.stage !== "won";
   const sortedActivities = [...lead.activities].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   useEffect(() => {
-    if (confirming) {
-      confirmTitle.current?.focus();
-    } else if (confirmTrigger.current) {
+    if (!showingConfirmation && confirmTrigger.current) {
       const target = confirmTrigger.current;
-      (target.isConnected ? target : saleControl.current ?? stageControl.current)?.focus();
+      (target.isConnected ? target : saleControl.current ?? clientsControl.current ?? stageControl.current)?.focus();
       confirmTrigger.current = null;
     }
-  }, [confirming]);
+  }, [showingConfirmation]);
 
   function openConfirmation(trigger: HTMLElement) {
     confirmTrigger.current = trigger;
     setConfirming(true);
+    setStageError("");
+  }
+
+  function cancelConfirmation() {
+    setConfirming(false);
     setStageError("");
   }
 
@@ -500,14 +681,16 @@ export function LeadDrawer({
     <Panel
       title={lead.stage === "won" ? "Ficha de cliente" : "Ficha del lead"}
       onClose={onClose}
+      onCancel={showingConfirmation ? cancelConfirmation : onClose}
       busy={!!busy}
     >
       <div className="lead-panel-scroll lead-panel-detail">
+        <p className="lead-panel-status" role="status">{statusMessage}</p>
         <section className="lead-panel-identity" aria-label="Información del contacto">
           <div className="lead-panel-avatar" aria-hidden="true">{initials(lead.name)}</div>
           <div className="lead-panel-identity-text">
             <h3>{lead.name}</h3>
-            {(lead.company || lead.role) && <p>{[lead.company, lead.role].filter(Boolean).join(" · ")}</p>}
+            {identity && <p>{identity}</p>}
           </div>
           <button type="button" onClick={() => onEdit()} disabled={!!busy} className="lead-panel-button lead-panel-secondary">
             <Pencil size={16} aria-hidden="true" /> Editar
@@ -580,35 +763,31 @@ export function LeadDrawer({
           )}
         </section>
 
-        {stageError && <p className="lead-panel-alert" role="alert">{stageError}</p>}
-        {lead.stage !== "won" && (
-          confirming ? (
-            <section className="lead-panel-confirm" aria-labelledby={confirmTitleId}>
-              <div>
-                <h3 id={confirmTitleId} ref={confirmTitle} tabIndex={-1}>Confirmar venta</h3>
-                <p>El contacto pasará a Clientes y conservará su historial.</p>
-              </div>
-              <div className="lead-panel-confirm-actions">
-                <button type="button" className="lead-panel-button lead-panel-secondary" onClick={() => {
-                  setConfirming(false);
-                  setStageError("");
-                }} disabled={!!busy}>Cancelar</button>
-                <button type="button" className="lead-panel-button lead-panel-primary" onClick={() => void changeStage("won")} disabled={!!busy}>
-                  {busy === "stage" ? "Confirmando…" : "Confirmar"}
-                </button>
-              </div>
-            </section>
-          ) : (
-            <button type="button" className="lead-panel-button lead-panel-sale" ref={saleControl} onClick={(event) => openConfirmation(event.currentTarget)} disabled={!!busy}>
-              <CircleCheck size={17} aria-hidden="true" /> Confirmar venta
-            </button>
-          )
+        {lead.imported && <section className="lead-panel-summary" aria-label="Datos de importación">
+          <div className="lead-panel-summary-cell"><span>Hoja de origen</span><strong>{lead.imported.sheet}</strong></div>
+          {lead.imported.code && <div className="lead-panel-summary-cell"><span>Código</span><strong>{lead.imported.code}</strong></div>}
+          {lead.imported.activity && <div className="lead-panel-summary-cell lead-panel-full"><span>Actividad económica</span><strong>{lead.imported.activity}</strong></div>}
+          {lead.imported.unverifiedEmail && <div className="lead-panel-summary-cell lead-panel-full"><span>Correo de origen por verificar</span><strong>{lead.imported.unverifiedEmail}</strong></div>}
+          {lead.imported.fallbackName && <div className="lead-panel-summary-cell lead-panel-full"><span>El archivo no indicaba el nombre de la persona.</span></div>}
+        </section>}
+
+        {stageError && !showingConfirmation && <p className="lead-panel-alert" role="alert">{stageError}</p>}
+        {lead.stage === "won" ? (
+          <button type="button" className="lead-panel-button lead-panel-sale" ref={clientsControl} onClick={onViewClients} disabled={!!busy}>
+            <ArrowUpRight size={17} aria-hidden="true" /> Ver clientes
+          </button>
+        ) : showingConfirmation ? (
+          <SaleConfirmation busy={!!busy} error={stageError} onCancel={cancelConfirmation} onConfirm={() => void changeStage("won")} />
+        ) : (
+          <button type="button" className="lead-panel-button lead-panel-sale" ref={saleControl} onClick={(event) => openConfirmation(event.currentTarget)} disabled={!!busy}>
+            <CircleCheck size={17} aria-hidden="true" /> Confirmar venta
+          </button>
         )}
 
         <section className="lead-panel-next" aria-label="Próximo seguimiento">
           <span className="lead-panel-next-icon"><CalendarDays size={19} aria-hidden="true" /></span>
           <div className="lead-panel-next-details">
-            <h3>{lead.nextAction || "Próximo seguimiento"}</h3>
+            <h3>{lead.nextAction || "Sin próxima acción"}</h3>
             {lead.nextFollowUp
               ? <time dateTime={lead.nextFollowUp}><Clock3 size={14} aria-hidden="true" /> {formatDate(lead.nextFollowUp)}</time>
               : <p>Sin fecha agendada</p>}

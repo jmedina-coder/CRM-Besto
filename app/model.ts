@@ -1,10 +1,11 @@
 export type Stage = 'new' | 'contacted' | 'scheduled' | 'proposal' | 'won' | 'lost';
-export type SalesUserId = 'jhon' | 'pelos';
+export type SalesUserId = 'jhon' | 'pelos' | 'alejandra';
 export type CrmUser = { id: SalesUserId; name: string; role: 'manager' | 'seller' };
 
 export const SALES_USERS: CrmUser[] = [
   { id: 'jhon', name: 'Jhon', role: 'manager' },
   { id: 'pelos', name: 'Pelos', role: 'seller' },
+  { id: 'alejandra', name: 'Alejandra', role: 'seller' },
 ];
 
 export const STAGES: { id: Stage; label: string; color: string; description: string }[] = [
@@ -16,12 +17,12 @@ export const STAGES: { id: Stage; label: string; color: string; description: str
   { id: 'lost', label: 'Perdido', color: 'rose', description: 'Oportunidades cerradas' },
 ];
 
-export const SOURCES = ['Visita presencial', 'WhatsApp', 'Instagram', 'Facebook', 'Llamada', 'Referido', 'Sitio web', 'Otro'];
+export const SOURCES = ['Visita presencial', 'WhatsApp', 'Instagram', 'Facebook', 'Llamada', 'Referido', 'Sitio web', 'Importación de contactos', 'Otro'];
 export type ActivityKind = 'note' | 'whatsapp' | 'call' | 'meeting' | 'email';
 export type ActivityInput = { kind: ActivityKind; body: string; direction?: 'sent' | 'received' };
 export type Activity = Omit<ActivityInput, 'kind'> & {
   id: string;
-  kind: ActivityKind | 'stage' | 'created';
+  kind: ActivityKind | 'stage' | 'created' | 'updated';
   createdAt: string;
   author?: SalesUserId;
 };
@@ -46,6 +47,24 @@ export type Lead = LeadInput & {
   wonAt: string | null;
   revision: number;
   activities: Activity[];
+  imported?: {
+    code: string;
+    sheet: string;
+    activity: string;
+    unverifiedEmail?: string;
+    fallbackName?: true;
+  };
+};
+
+export type LeadImportReport = {
+  rows: number;
+  sheets: Array<{ name: string; rows: number }>;
+  ignoredSheets: string[];
+  namesCompleted: number;
+  unverifiedEmails: number;
+  assigned: Record<SalesUserId, number>;
+  created?: number;
+  skipped?: number;
 };
 
 export const TIME_ZONE = 'America/Bogota';
