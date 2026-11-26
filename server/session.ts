@@ -9,7 +9,11 @@ const derive = promisify(scrypt);
 const cookieName = "besto_crm";
 const sessionLifetime = 60 * 60 * 24 * 7;
 const attemptWindow = 15 * 60_000;
+// Failed-login limits. The per-account limit is scoped to the client address so a
+// stranger cannot lock the real user out; the per-address limit stops one address
+// from guessing across accounts.
 const attemptLimit = 8;
+const addressLimit = 20;
 const passwordVariables: Record<SalesUserId, string> = {
   jhon: "CRM_JHON_PASSWORD_HASH",
   pelos: "CRM_PELOS_PASSWORD_HASH",
@@ -37,7 +41,19 @@ function signingKey(userId: SalesUserId) {
   return createHmac("sha256", secret).update(userId).update(salt).update(key).digest();
 }
 
-export function currentUser(request: NextRequest) {
+// Client address used to scope login throttling. X-Forwarded-For is attacker-controlled
+// unless a trusted proxy sets it, so it is only read on Vercel (which overwrites it) or
+// when CRM_TRUST_PROXY=1 is set for a proxy that appends the real address. The last entry
+// is the one that proxy added. Without a trusted proxy every client shares "local".
+export function clientAddress(request: NextRequest) {
+  if (!process.env.VERCEL && process.env.CRM_TRUST_PROXY !== "1") return "local";
+  const forwarded = request.headers.get("x-forwarded-for")?.split(",").map((part) => part.trim()).filter(Boolean).at(-1);
+  return forwarded && /^[0-9a-f:.]{3,45}$/i.test(forwarded) ? forwarded.toLowerCase() : "unknown";
+}
+
+// Verifies the cookie's shape, expiry and signature. It does not check the server-side
+// session record; use currentUser() for that.
+function readToken(request: NextRequest) {
   const token = request.cookies.get(cookieName)?.value;
   if (!token) return null;
 
@@ -58,11 +74,19 @@ export function currentUser(request: NextRequest) {
   }
 
   const expected = createHmac("sha256", signingKey(user.id)).update(`${id}.${expiry}.${nonce}`).digest();
-  return timingSafeEqual(expected, Buffer.from(signature, "hex")) ? user : null;
+  return timingSafeEqual(expected, Buffer.from(signature, "hex")) ? { user, nonce } : null;
 }
 
-export function requireSession(request: NextRequest) {
-  const user = currentUser(request);
+export async function currentUser(request: NextRequest) {
+  const token = readToken(request);
+  if (!token) return null;
+  // A valid signature is not enough: logging out (or expiry cleanup) removes the record.
+  const store = await getStore();
+  return (await store.hasSession(token.nonce, token.user.id, Math.floor(Date.now() / 1_000))) ? token.user : null;
+}
+
+export async function requireSession(request: NextRequest) {
+  const user = await currentUser(request);
   if (!user) throw new RequestError(401, "Inicia sesión para continuar.");
   return user;
 }
@@ -77,7 +101,7 @@ function cookieOptions(request: NextRequest, maxAge: number) {
   };
 }
 
-export async function authenticate(username: unknown, password: unknown): Promise<CrmUser> {
+export async function authenticate(username: unknown, password: unknown, address = "local"): Promise<CrmUser> {
   if (
     typeof username !== "string" ||
     typeof password !== "string" ||
@@ -90,10 +114,16 @@ export async function authenticate(username: unknown, password: unknown): Promis
   }
 
   const user = getUser(username.trim().toLowerCase());
-  const bucket = user?.id ?? "unknown";
+  const accountBucket = `user:${user?.id ?? "unknown"}:${address}`;
   const now = Date.now();
+  const expires = now + attemptWindow;
   const store = await getStore();
-  if (!(await store.reserveLoginAttempt(bucket, now, now + attemptWindow, attemptLimit))) {
+  // Requests without a known address share one bucket, so a per-address cap there would
+  // let anyone lock everybody out; only the per-account limit applies in that case.
+  const addressKnown = address !== "local" && address !== "unknown";
+  const allowed = (!addressKnown || await store.reserveLoginAttempt(`ip:${address}`, now, expires, addressLimit)) &&
+    await store.reserveLoginAttempt(accountBucket, now, expires, attemptLimit);
+  if (!allowed) {
     throw new RequestError(429, "Demasiados intentos. Espera hasta 15 minutos y vuelve a intentar.");
   }
 
@@ -105,17 +135,24 @@ export async function authenticate(username: unknown, password: unknown): Promis
   const valid = timingSafeEqual(provided, key);
   if (!user || !valid) throw new RequestError(401, "El usuario o la contraseña son incorrectos.");
 
-  await store.resetLoginAttempts(bucket);
+  await store.resetLoginAttempts(accountBucket);
+  // Best-effort cleanup of expired sessions and throttle rows so they cannot pile up.
+  if (Math.random() < 0.05) await store.purgeExpired(now).catch(() => {});
   return user;
 }
 
-export function startSession(request: NextRequest, response: NextResponse, user: CrmUser) {
+export async function startSession(request: NextRequest, response: NextResponse, user: CrmUser) {
   const expires = Math.floor(Date.now() / 1_000) + sessionLifetime;
-  const payload = `${user.id}.${expires}.${randomBytes(16).toString("hex")}`;
+  const nonce = randomBytes(16).toString("hex");
+  const payload = `${user.id}.${expires}.${nonce}`;
   const signature = createHmac("sha256", signingKey(user.id)).update(payload).digest("hex");
+  await (await getStore()).createSession(nonce, user.id, expires);
   response.cookies.set(cookieName, `${payload}.${signature}`, cookieOptions(request, sessionLifetime));
 }
 
-export function endSession(request: NextRequest, response: NextResponse) {
+export async function endSession(request: NextRequest, response: NextResponse) {
+  // A misconfigured server cannot have issued valid sessions, so logging out still works.
+  const token = (() => { try { return readToken(request); } catch { return null; } })();
+  if (token) await (await getStore()).deleteSession(token.nonce);
   response.cookies.set(cookieName, "", cookieOptions(request, 0));
 }

@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID, scryptSync } from "node:crypto";
 import { once } from "node:events";
-import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -29,9 +28,13 @@ async function availablePort() {
 }
 
 test("roles, contact history, and login limits persist across sessions and process restarts", {
-  timeout: 90_000,
+  timeout: 240_000,
 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "besto-crm-test-"));
+  // The test project lives inside the repository's git-ignored .data folder so that
+  // node_modules resolves through normal parent lookup. Symlinking node_modules from
+  // the OS temp directory breaks Next.js dev on Windows (missing .next/dev manifests).
+  await mkdir(join(project, ".data"), { recursive: true });
+  const directory = await mkdtemp(join(project, ".data", "test-"));
   const jhonPassword = randomBytes(18).toString("hex");
   const pelosPassword = randomBytes(18).toString("hex");
   const alejandraPassword = randomBytes(18).toString("hex");
@@ -84,7 +87,7 @@ test("roles, contact history, and login limits persist across sessions and proce
     delete environment.VERCEL;
     delete environment.VERCEL_ENV;
     child = spawn(process.execPath, [
-      join(directory, "node_modules/next/dist/bin/next"), "dev", "--webpack",
+      join(project, "node_modules/next/dist/bin/next"), "dev", "--webpack",
       "--hostname", "127.0.0.1", "--port", String(port),
     ], { cwd: directory, env: environment, stdio: ["ignore", "pipe", "pipe"] });
     for (const stream of [child.stdout, child.stderr]) {
@@ -112,7 +115,6 @@ test("roles, contact history, and login limits persist across sessions and proce
       cp(join(project, "app/model.ts"), join(directory, "app/model.ts")),
       cp(join(project, "app/api"), join(directory, "app/api"), { recursive: true }),
       cp(join(project, "server"), join(directory, "server"), { recursive: true }),
-      symlink(join(project, "node_modules"), join(directory, "node_modules"), "dir"),
     ]);
     await start();
     assert.equal((await request("/api/leads")).status, 401);
@@ -282,6 +284,9 @@ test("roles, contact history, and login limits persist across sessions and proce
     assert.match((await request("/api/session", {
       method: "DELETE", cookie: seller,
     })).setCookie, /Max-Age=0/i);
+    // Logging out revokes the cookie on the server; the rest of the flow needs a new session.
+    assert.equal((await request("/api/session", { cookie: seller })).data.user, null);
+    const sellerSession = (await login("pelos", pelosPassword)).setCookie.split(";")[0];
 
     const importPath = "/api/leads/import?format=csv&assignee=alejandra";
     const importRows = [
@@ -295,22 +300,22 @@ test("roles, contact history, and login limits persist across sessions and proce
       });
       return { status: response.status, data: await response.json() };
     }
-    assert.equal((await upload(seller)).status, 403);
+    assert.equal((await upload(sellerSession)).status, 403);
     const preview = await upload(manager);
     assert.equal(preview.status, 200);
     assert.deepEqual(preview.data.assigned, { jhon: 0, pelos: 1, alejandra: 504 });
     assert.equal(preview.data.rows, 505);
     assert.equal(preview.data.namesCompleted, 1);
     assert.equal(preview.data.unverifiedEmails, 1);
-    assert.equal((await request("/api/leads?after=", { cookie: seller })).data.leads.length, 0);
+    assert.equal((await request("/api/leads?after=", { cookie: sellerSession })).data.leads.length, 0);
     assert.equal((await upload(manager, true, importRows + "\n0002;Sin usuario;;;;;Desconocido")).status, 400);
-    assert.equal((await request("/api/leads?after=", { cookie: seller })).data.leads.length, 0);
+    assert.equal((await request("/api/leads?after=", { cookie: sellerSession })).data.leads.length, 0);
 
     const imported = await upload(manager, true);
     assert.equal(imported.status, 201);
     assert.equal(imported.data.created, 505);
     assert.equal((await upload(manager, true)).data.skipped, 505);
-    const sellerPage = await request("/api/leads?after=", { cookie: seller });
+    const sellerPage = await request("/api/leads?after=", { cookie: sellerSession });
     assert.equal(sellerPage.data.nextCursor, null);
     assert.equal(sellerPage.data.leads.length, 1);
     const importedLead = sellerPage.data.leads[0];

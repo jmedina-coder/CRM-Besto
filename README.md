@@ -42,6 +42,15 @@ El formato BESTO usa los encabezados **Código**, **Nombre de la persona**, **Te
 
 Configura `CRM_SESSION_SECRET` y los hashes de contraseña como secretos de Vercel en Production y Preview. Configura `DATABASE_URL` con la cadena de conexión de Supabase de cada entorno: en el panel de Supabase, **Connect → Connection string → Transaction pooler** (puerto `6543`). El servidor se conecta directo a Postgres; no usa la clave publicable ni la API de datos de Supabase. El CRM crea sus tablas automáticamente y activa RLS sin políticas, así que la API pública no puede leerlas. El esquema también está en `supabase/migrations/` para aplicarlo desde el editor SQL o con `supabase db push`. Vuelve a desplegar después de cambiar un secreto. La protección de despliegues de Vercel y las cuentas del CRM controlan accesos distintos.
 
+## Seguridad
+
+- **Conexión a la base de datos.** El servidor verifica el certificado de Postgres. Si el proveedor usa una CA que Node no conoce, descarga su certificado (en Supabase: **Database → Settings → SSL Configuration**) y guárdalo en `DATABASE_CA_CERT` como PEM, con `\n` en lugar de saltos de línea. `DATABASE_TLS_VERIFY=false` desactiva la verificación; úsalo solo como medida temporal y explícita, porque deja la conexión expuesta a interceptación.
+- **Sesiones.** Cada inicio de sesión se guarda en la tabla `besto_sessions`. Cerrar sesión la revoca en el servidor, y cambiar la contraseña de un usuario invalida todas sus sesiones. La cookie dura 7 días como máximo.
+- **Intentos de inicio de sesión.** Cada cuenta admite 8 intentos fallidos cada 15 minutos **por dirección de origen**, y cada dirección admite 20 en total. Así, un desconocido no puede bloquear la cuenta de otra persona. La dirección se lee de `X-Forwarded-For` solo en Vercel o si defines `CRM_TRUST_PROXY=1`; actívalo únicamente detrás de un proxy que añada la dirección real. Sin proxy de confianza, todos los clientes comparten la dirección `local` y solo rige el límite por cuenta.
+- **Eliminar contactos.** Solo el encargado de ventas puede eliminar contactos.
+- **Cabeceras.** Todas las respuestas llevan CSP, HSTS y aislamiento de origen cruzado (ver `next.config.ts`). La CSP mantiene `unsafe-inline` en scripts y estilos porque Next.js inserta scripts en línea; el resto del origen queda restringido.
+- **MCP.** `.mcp.json` conecta Supabase en solo lectura y sin acceso a la cuenta. No lo amplíes en un repositorio compartido.
+
 ## Verificación
 
 ```bash
@@ -50,4 +59,4 @@ npm test
 npm run build
 ```
 
-La prueba HTTP usa su propia base temporal y genera credenciales de prueba para verificar permisos, historial, concurrencia y persistencia.
+Las pruebas HTTP levantan su propia copia del servidor con una base temporal dentro de `.data/` y generan credenciales de prueba para verificar permisos, historial, concurrencia, persistencia, sesiones, límites de intentos y cabeceras. Se ejecutan de una en una; tardan unos dos minutos.

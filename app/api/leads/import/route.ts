@@ -10,7 +10,7 @@ export const maxDuration = 60;
 export function POST(request: NextRequest) {
   return handle(async () => {
     verifyOrigin(request);
-    const actor = requireSession(request);
+    const actor = await requireSession(request);
     if (actor.role !== "manager") throw new RequestError(403, "Solo el encargado de ventas puede importar contactos.");
     const query = request.nextUrl.searchParams;
     const format = query.get("format");

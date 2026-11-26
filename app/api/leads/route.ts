@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export function GET(request: NextRequest) {
   return handle(async () => {
-    const user = requireSession(request);
+    const user = await requireSession(request);
     const page = request.nextUrl.searchParams.get("after");
     if (page !== null) return reply(await listLeadPage(user, leadCursor(page)));
     return reply({ leads: await listLeads(user) });
@@ -18,7 +18,7 @@ export function GET(request: NextRequest) {
 export function POST(request: NextRequest) {
   return handle(async () => {
     verifyOrigin(request);
-    const user = requireSession(request);
+    const user = await requireSession(request);
     const lead = await createLead(await readBody(request), user, idempotencyKey(request));
     return reply({ lead }, 201);
   });

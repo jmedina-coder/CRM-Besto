@@ -359,6 +359,12 @@ export async function addActivity(id: string, body: Record<string, unknown>, use
 }
 
 export async function deleteLead(id: string, user: CrmUser) {
+  // Contacts outside the caller's scope stay a 404; only then is the role checked, so
+  // the answer never reveals whether a contact the caller cannot see exists.
+  await getLead(id, user);
+  if (user.role !== "manager") {
+    throw new RequestError(403, "Solo el encargado de ventas puede eliminar contactos.");
+  }
   if (!(await (await getStore()).remove(id, scope(user)))) {
     throw new RequestError(404, "El contacto no está disponible.");
   }

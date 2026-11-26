@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import postgres from "postgres";
 import type { Lead, SalesUserId } from "../app/model";
+import { sslOptions } from "./db-tls";
 
 export type StoredLead = Lead & { creationFingerprint?: string };
 
@@ -16,20 +17,25 @@ type Store = {
   remove(id: string, assignee: SalesUserId | null): Promise<boolean>;
   reserveLoginAttempt(bucket: string, now: number, expires: number, limit: number): Promise<boolean>;
   resetLoginAttempts(bucket: string): Promise<void>;
+  // Server-side sessions: a signed cookie alone is not enough, its nonce must be stored.
+  // Session expiry is in epoch seconds; login attempts use epoch milliseconds.
+  createSession(nonce: string, userId: SalesUserId, expiresAt: number): Promise<void>;
+  hasSession(nonce: string, userId: SalesUserId, nowSeconds: number): Promise<boolean>;
+  deleteSession(nonce: string): Promise<void>;
+  purgeExpired(nowMilliseconds: number): Promise<void>;
 };
 
-function isLocalHost(url: string) {
-  const { hostname } = new URL(url);
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
-
 async function postgresStore(url: string): Promise<Store> {
+  const ssl = sslOptions(url, process.env);
+  if (ssl && !ssl.rejectUnauthorized) {
+    console.warn("DATABASE_TLS_VERIFY=false: the database certificate is NOT being verified.");
+  }
   // Supabase's transaction pooler (port 6543) does not support prepared statements.
   const sql = postgres(url, {
     prepare: false,
     max: 5,
     idle_timeout: 20,
-    ssl: isLocalHost(url) ? false : "require",
+    ssl,
     onnotice: () => {},
   });
   // Pass objects, not JSON strings: the driver serializes jsonb parameters itself,
@@ -55,9 +61,19 @@ async function postgresStore(url: string): Promise<Store> {
         expires_at BIGINT NOT NULL
       )
     `;
+    await tx`
+      CREATE TABLE IF NOT EXISTS besto_sessions (
+        nonce TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        expires_at BIGINT NOT NULL
+      )
+    `;
     await tx`CREATE INDEX IF NOT EXISTS besto_leads_assignee_id ON besto_leads (assignee, id)`;
+    await tx`CREATE INDEX IF NOT EXISTS besto_login_attempts_expiry ON besto_login_attempts (expires_at)`;
+    await tx`CREATE INDEX IF NOT EXISTS besto_sessions_expiry ON besto_sessions (expires_at)`;
     await tx`ALTER TABLE besto_leads ENABLE ROW LEVEL SECURITY`;
     await tx`ALTER TABLE besto_login_attempts ENABLE ROW LEVEL SECURITY`;
+    await tx`ALTER TABLE besto_sessions ENABLE ROW LEVEL SECURITY`;
   });
 
   return {
@@ -153,6 +169,23 @@ async function postgresStore(url: string): Promise<Store> {
     async resetLoginAttempts(bucket) {
       await sql`DELETE FROM besto_login_attempts WHERE bucket = ${bucket}`;
     },
+    async createSession(nonce, userId, expiresAt) {
+      await sql`INSERT INTO besto_sessions (nonce, user_id, expires_at) VALUES (${nonce}, ${userId}, ${expiresAt})`;
+    },
+    async hasSession(nonce, userId, nowSeconds) {
+      const rows = await sql`
+        SELECT 1 FROM besto_sessions
+        WHERE nonce = ${nonce} AND user_id = ${userId} AND expires_at > ${nowSeconds}
+      `;
+      return rows.length === 1;
+    },
+    async deleteSession(nonce) {
+      await sql`DELETE FROM besto_sessions WHERE nonce = ${nonce}`;
+    },
+    async purgeExpired(nowMilliseconds) {
+      await sql`DELETE FROM besto_sessions WHERE expires_at <= ${Math.floor(nowMilliseconds / 1_000)}`;
+      await sql`DELETE FROM besto_login_attempts WHERE expires_at <= ${nowMilliseconds}`;
+    },
   };
 }
 
@@ -176,7 +209,14 @@ function localStore(): Store {
       attempts INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS besto_sessions (
+      nonce TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS besto_leads_assignee_id ON besto_leads (assignee, id);
+    CREATE INDEX IF NOT EXISTS besto_login_attempts_expiry ON besto_login_attempts (expires_at);
+    CREATE INDEX IF NOT EXISTS besto_sessions_expiry ON besto_sessions (expires_at);
   `);
   const list = db.prepare(`
     SELECT payload FROM besto_leads WHERE (? IS NULL OR assignee = ?)
@@ -205,6 +245,11 @@ function localStore(): Store {
     WHERE besto_login_attempts.expires_at <= ? OR besto_login_attempts.attempts < ?
   `);
   const resetLoginAttempts = db.prepare("DELETE FROM besto_login_attempts WHERE bucket = ?");
+  const createSession = db.prepare("INSERT INTO besto_sessions (nonce, user_id, expires_at) VALUES (?, ?, ?)");
+  const hasSession = db.prepare("SELECT 1 AS found FROM besto_sessions WHERE nonce = ? AND user_id = ? AND expires_at > ?");
+  const deleteSession = db.prepare("DELETE FROM besto_sessions WHERE nonce = ?");
+  const purgeSessions = db.prepare("DELETE FROM besto_sessions WHERE expires_at <= ?");
+  const purgeAttempts = db.prepare("DELETE FROM besto_login_attempts WHERE expires_at <= ?");
   function insertLead(lead: StoredLead) {
     return insert.run(lead.id, lead.revision, lead.assignee, JSON.stringify(lead), lead.updatedAt).changes === 1;
   }
@@ -249,6 +294,19 @@ function localStore(): Store {
     },
     async resetLoginAttempts(bucket) {
       resetLoginAttempts.run(bucket);
+    },
+    async createSession(nonce, userId, expiresAt) {
+      createSession.run(nonce, userId, expiresAt);
+    },
+    async hasSession(nonce, userId, nowSeconds) {
+      return hasSession.get(nonce, userId, nowSeconds) !== undefined;
+    },
+    async deleteSession(nonce) {
+      deleteSession.run(nonce);
+    },
+    async purgeExpired(nowMilliseconds) {
+      purgeSessions.run(Math.floor(nowMilliseconds / 1_000));
+      purgeAttempts.run(nowMilliseconds);
     },
   };
 }

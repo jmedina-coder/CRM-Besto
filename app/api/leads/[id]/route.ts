@@ -10,7 +10,7 @@ type Context = { params: Promise<{ id: string }> };
 
 export function GET(request: NextRequest, context: Context) {
   return handle(async () => {
-    const user = requireSession(request);
+    const user = await requireSession(request);
     return reply({ lead: await getLead(await leadId(context), user) });
   });
 }
@@ -18,7 +18,7 @@ export function GET(request: NextRequest, context: Context) {
 export function PATCH(request: NextRequest, context: Context) {
   return handle(async () => {
     verifyOrigin(request);
-    const user = requireSession(request);
+    const user = await requireSession(request);
     const id = await leadId(context);
     return reply({ lead: await updateLead(id, await readBody(request), user) });
   });
@@ -27,7 +27,7 @@ export function PATCH(request: NextRequest, context: Context) {
 export function DELETE(request: NextRequest, context: Context) {
   return handle(async () => {
     verifyOrigin(request);
-    const user = requireSession(request);
+    const user = await requireSession(request);
     await deleteLead(await leadId(context), user);
     return reply({ deleted: true });
   });

@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   return handle(async () => {
     verifyOrigin(request);
-    const user = requireSession(request);
+    const user = await requireSession(request);
     const id = await leadId(context);
     const lead = await addActivity(id, await readBody(request), user, idempotencyKey(request));
     return reply({ lead }, 201);
